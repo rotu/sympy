@@ -2,6 +2,7 @@
 Boolean algebra module for SymPy
 """
 from __future__ import print_function, division
+from _ast import Lambda, Tuple
 
 from collections import defaultdict
 from itertools import combinations, product
@@ -13,7 +14,7 @@ from sympy.core.numbers import Number
 from sympy.core.decorators import deprecated
 from sympy.core.operations import LatticeOp
 from sympy.core.function import Application
-from sympy.core.compatibility import ordered, xrange, with_metaclass
+from sympy.core.compatibility import ordered, xrange, with_metaclass, iterable
 from sympy.core.sympify import converter, _sympify, sympify
 from sympy.core.singleton import Singleton, S
 
@@ -78,7 +79,7 @@ class Boolean(Basic):
         if self.has(Relational) or other.has(Relational):
             raise NotImplementedError('handling of relationals')
         return self.atoms() == other.atoms() and \
-                not satisfiable(Not(Equivalent(self, other)))
+               not satisfiable(Not(Equivalent(self, other)))
 
 
 # Developer note: There is liable to be some confusion as to when True should
@@ -90,8 +91,8 @@ class Boolean(Basic):
 
 # The rule of thumb is:
 
-#   "If the boolean in question can be replaced by an arbitrary symbolic
-#   Boolean, like Or(x, y) or x > 1, use S.true. Otherwise, use True"
+# "If the boolean in question can be replaced by an arbitrary symbolic
+# Boolean, like Or(x, y) or x > 1, use S.true. Otherwise, use True"
 
 # In other words, use S.true only on those contexts where the boolean is being
 # used as a symbolic representation of truth.  For example, if the object ends
@@ -122,9 +123,11 @@ class BooleanAtom(Boolean):
     """
     Base class of BooleanTrue and BooleanFalse.
     """
+
     @property
     def canonical(self):
         return self
+
 
 class BooleanTrue(with_metaclass(Singleton, BooleanAtom)):
     """
@@ -154,6 +157,7 @@ class BooleanTrue(with_metaclass(Singleton, BooleanAtom)):
     sympy.logic.boolalg.BooleanFalse
 
     """
+
     def __nonzero__(self):
         return True
 
@@ -204,6 +208,7 @@ class BooleanFalse(with_metaclass(Singleton, BooleanAtom)):
     sympy.logic.boolalg.BooleanTrue
 
     """
+
     def __nonzero__(self):
         return False
 
@@ -224,7 +229,9 @@ class BooleanFalse(with_metaclass(Singleton, BooleanAtom)):
         EmptySet()
         """
         from sympy.sets.sets import EmptySet
+
         return EmptySet()
+
 
 true = BooleanTrue()
 false = BooleanFalse()
@@ -236,6 +243,7 @@ S.true = true
 S.false = false
 
 converter[bool] = lambda x: S.true if x else S.false
+
 
 class BooleanFunction(Application, Boolean):
     """Boolean function is a function that lives in a boolean space
@@ -338,6 +346,7 @@ class And(LatticeOp, BooleanFunction):
         (-2, 2)
         """
         from sympy.sets.sets import Intersection
+
         if len(self.free_symbols) == 1:
             return Intersection(*[arg.as_set() for arg in self.args])
         else:
@@ -409,6 +418,7 @@ class Or(LatticeOp, BooleanFunction):
         (-oo, -2) U (2, oo)
         """
         from sympy.sets.sets import Union
+
         if len(self.free_symbols) == 1:
             return Union(*[arg.as_set() for arg in self.args])
         else:
@@ -528,7 +538,7 @@ class Not(BooleanFunction):
 
         if func == Xor:
             result = []
-            for i in xrange(1, len(args)+1, 2):
+            for i in xrange(1, len(args) + 1, 2):
                 for neg in combinations(args, i):
                     clause = [~s if s in neg else s for s in args]
                     result.append(Or(*clause))
@@ -581,6 +591,7 @@ class Xor(BooleanFunction):
     x
 
     """
+
     def __new__(cls, *args, **kwargs):
         argset = set([])
         obj = super(Xor, cls).__new__(cls, *args, **kwargs)
@@ -635,7 +646,7 @@ class Xor(BooleanFunction):
 
     def to_nnf(self, simplify=True):
         args = []
-        for i in xrange(0, len(self.args)+1, 2):
+        for i in xrange(0, len(self.args) + 1, 2):
             for neg in combinations(self.args, i):
                 clause = [~s if s in neg else s for s in self.args]
                 args.append(Or(*clause))
@@ -666,6 +677,7 @@ class Nand(BooleanFunction):
     Not(And(x, y))
 
     """
+
     @classmethod
     def eval(cls, *args):
         return Not(And(*args))
@@ -700,6 +712,7 @@ class Nor(BooleanFunction):
     Not(Or(x, y))
 
     """
+
     @classmethod
     def eval(cls, *args):
         return Not(Or(*args))
@@ -753,6 +766,7 @@ class Implies(BooleanFunction):
     False
 
     """
+
     @classmethod
     def eval(cls, *args):
         try:
@@ -805,13 +819,15 @@ class Equivalent(BooleanFunction):
     >>> Equivalent(x, And(x, True))
     True
     """
+
     def __new__(cls, *args, **options):
         from sympy.core.relational import Relational
+
         args = [_sympify(arg) for arg in args]
 
         argset = set(args)
         for x in args:
-            if isinstance(x, Number) or x in [True, False]: # Includes 0, 1
+            if isinstance(x, Number) or x in [True, False]:  # Includes 0, 1
                 argset.discard(x)
                 argset.add(True if x else False)
         rel = []
@@ -882,6 +898,7 @@ class ITE(BooleanFunction):
     >>> ITE(x, y, y)
     y
     """
+
     @classmethod
     def eval(cls, *args):
         try:
@@ -898,6 +915,118 @@ class ITE(BooleanFunction):
     def to_nnf(self, simplify=True):
         a, b, c = self.args
         return And._to_nnf(Or(~a, b), Or(a, c), simplify=simplify)
+
+
+class Quantifier(BooleanFunction):
+    def __new__(cls, variables, predicate):
+        if isinstance(predicate, cls):
+            captured_symbols = variables + predicate.variables
+        else:
+            captured_symbols = variables
+        from sympy import Set
+
+        return super().__new__(cls, ( Set(captured_symbols), predicate))
+
+    @property
+    def predicate(self):
+        return self.args[1]
+
+    @property
+    def variables(self):
+        return self.args[0]
+
+    @property
+    def free_symbols(self):
+        return self.predicate.free_symbols - self.symbols
+
+
+class ForAll(Quantifier):
+    """
+    Universal quantifier.
+    ForAll(*xs, C) returns true if it is true for every x in xs.
+    This will prevent
+
+    Examples
+    ========
+
+    >>> from sympy.logic.boolalg import ForAll
+    >>> from sympy.abc import x
+    >>> simplify(ForAll(x, True)
+    True
+    >>> simplify(ForAll(x, False)
+    False
+    """
+
+    def __invert__(self):
+        return Exists(self.variables, ~self.predicate)
+
+    @classmethod
+    def _new_args_filter(cls, args):
+        variables,predicate = args
+
+        from sympy.sets.sets import FiniteSet
+        try:
+            for v in variables if iterable(variables) else [variables]:
+                if not v.is_Symbol:
+                    raise TypeError('variable is not a symbol: %s' % v)
+        except (AssertionError, AttributeError):
+            raise ValueError('variable is not a Symbol: %s' % v)
+        try:
+            variables = Tuple(*variables)
+        except TypeError:
+            variables = Tuple(variables)
+        if len(variables) == 1 and variables[0] == expr:
+            return S.IdentityFunction
+
+        predicate = S(predicate)
+        obj = Expr.__new__(cls, Tuple(*variables), S(expr))
+        obj.nargs = FiniteSet(len(variables))
+        return obj
+
+    @classmethod
+    def eval(cls, *args):
+        try:
+            xs, b = args
+        except ValueError:
+            raise ValueError("ITE expects exactly 3 arguments")
+        if not xs:
+            return b
+        if a == False:
+            return c
+        if b == c:
+            return b
+
+
+class Exists(Quantifier):
+    """
+    Existential quantifier.
+    Exists(*xs, C) returns true if there is an x in xs satisfying the proposition
+    This will prevent
+
+    Examples
+    ========
+
+    >>> from sympy.logic.boolalg import ForAll
+    >>> from sympy.abc import x
+    >>> simplify(ForAll(x, True)
+    True
+    >>> simplify(ForAll(x, False)
+    False
+    """
+    def __invert__(self):
+        return ForAll(self.variables, ~self.predicate)
+
+    def func(self):
+        from sympy import solve
+
+        solutions = solve(self.predicate, self.variables, dict=True)
+        if solutions is None:
+            return None
+        if solutions:
+            return True
+        else:
+            return False
+
 
 ### end class definitions. Some useful methods
 
@@ -983,10 +1112,10 @@ def _distribute(info):
             return info[0]
         rest = info[2](*[a for a in info[0].args if a is not conj])
         return info[1](*list(map(_distribute,
-            [(info[2](c, rest), info[1], info[2]) for c in conj.args])))
+                                 [(info[2](c, rest), info[1], info[2]) for c in conj.args])))
     elif info[0].func is info[1]:
         return info[1](*list(map(_distribute,
-            [(x, info[1], info[2]) for x in info[0].args])))
+                                 [(x, info[1], info[2]) for x in info[0].args])))
     else:
         return info[0]
 
@@ -1274,6 +1403,7 @@ def compile_rule(s):
 
     """
     import re
+
     return sympify(re.sub(r'([a-zA-Z_][a-zA-Z0-9_]*)', r'Symbol("\1")', s))
 
 
@@ -1443,7 +1573,6 @@ def SOPform(variables, minterms, dontcares=None):
     .. [1] en.wikipedia.org/wiki/Quine-McCluskey_algorithm
 
     """
-    from sympy.core.symbol import Symbol
 
     variables = [sympify(v) for v in variables]
     if minterms == []:
@@ -1495,7 +1624,6 @@ def POSform(variables, minterms, dontcares=None):
     .. [1] en.wikipedia.org/wiki/Quine-McCluskey_algorithm
 
     """
-    from sympy.core.symbol import Symbol
 
     variables = [sympify(v) for v in variables]
     if minterms == []:
@@ -1579,9 +1707,10 @@ def simplify_logic(expr, form=None, deep=True):
                 truthtable.append(t)
         if deep:
             from sympy.simplify.simplify import simplify
+
             variables = [simplify(v) for v in variables]
         if form == 'dnf' or \
-           (form is None and len(truthtable) >= (2 ** (len(variables) - 1))):
+                (form is None and len(truthtable) >= (2 ** (len(variables) - 1))):
             return SOPform(variables, truthtable)
         elif form == 'cnf' or form is None:
             return POSform(variables, truthtable)
